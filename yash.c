@@ -13,6 +13,7 @@
 #define STR_EQUAL(x1, x2)(strcmp(x1, x2) == 0)
 #define REDIR_INDEX 0
 #define REDIR_DIR 1
+#define min(a, b)(a <= b ? a : b)
 
 char** parse(char *cmdline, char* delim)
 {
@@ -33,31 +34,87 @@ char** parse(char *cmdline, char* delim)
     return tokens;
 }
 
-void check_for_redirection(char** tokens, int *retVal)
+int check_for_pipe(char** tokens)
 {
     int index = 0;
     while (tokens[index] != NULL)
     {
-        if (STR_EQUAL(tokens[index], ">") == true)
+        if (STR_EQUAL(tokens[index], "|") == true)
         {
-            retVal[REDIR_DIR] = -1;
+            return index;
         }
-        else if (STR_EQUAL(tokens[index], "<") == true)
-        {
-            retVal[REDIR_DIR] = 0;
-        }
-        else if (STR_EQUAL(tokens[index], "2>") == true)
-        {
-            retVal[REDIR_DIR] = 1;
-        }
-        else
-        {
-            index++;
-            continue;
-        }
-        retVal[REDIR_INDEX] = index;
-        return;
     }
+    return -1;
+}
+
+char* get_file_name(char** tokens, int index)
+{
+    return tokens[index + 1];
+}
+
+int check_for_redirection(char** tokens, char* direction)
+{
+    int index = 0;
+    while (tokens[index] != NULL)
+    {
+        if (STR_EQUAL(tokens[index], direction) == true)
+        {
+            return index;
+        }
+        index++;
+    }
+    return -1;
+}
+
+void set_redirection(char** tokens)
+{
+    int fd;
+    int redirection_index;
+
+    redirection_index = check_for_redirection(tokens, "<");
+    if (redirection_index > 0)
+    {
+        fd = open(
+            get_file_name(tokens, redirection_index), 
+            O_CREAT|O_RDWR, 
+            0666
+        );
+        dup2(fd, 0);
+    }
+    redirection_index = check_for_redirection(tokens, ">");
+    if (redirection_index > 0)
+    {
+        fd = open(
+            get_file_name(tokens, redirection_index), 
+            O_CREAT|O_RDWR, 
+            0666
+        );
+        dup2(fd, 1);
+    }
+    redirection_index = check_for_redirection(tokens, "2>");
+    if (redirection_index > 0)
+    {
+        fd = open(
+            get_file_name(tokens, redirection_index), 
+            O_CREAT|O_RDWR, 
+            0666
+        );
+        dup2(fd, 2);
+    }
+}
+
+int find_smallest_redirection_index(char** tokens)
+{
+    int index = 0;
+    while (tokens[index] != NULL)
+    {
+        if (STR_EQUAL(tokens[index], ">") || STR_EQUAL(tokens[index], "<") || STR_EQUAL(tokens[index], "2>"))
+        {
+            return index;
+        }
+        index++;
+    }
+    return -1;
 }
 
 int main()
@@ -66,47 +123,17 @@ int main()
     int cpid;
     char* cmdline;
     char **tokens;
-    int redirection[2];
     while(cmdline = readline("# "))
     {
         tokens = parse(cmdline, " ");
-        check_for_redirection(tokens, redirection);
         cpid = fork();
         if (cpid == 0) 
         {   
-            if (redirection[REDIR_INDEX] > 0)
+            int redirection_index = find_smallest_redirection_index(tokens);
+            if (redirection_index > 0)
             {
-                int redir_status;
-                int oldfd;
-                int newfd;
-                char* filename = tokens[redirection[REDIR_INDEX] + 1]; // get next token after redirect operator
-                
-                // Check if a filename is given for redirection
-                if (filename == NULL)
-                {
-                    exit(-1);
-                }
-
-                if (redirection[REDIR_DIR] == -1) // redirect output
-                {
-                    oldfd = STDOUT_FILENO;
-                }
-                else if (redirection[REDIR_DIR] == 0) // redirect input
-                {
-                    oldfd = STDIN_FILENO;
-                }
-                else if (redirection[REDIR_DIR] == 1) //redirect error
-                {
-                    oldfd = STDERR_FILENO;
-                }
-                newfd = open(filename, O_CREAT|O_RDWR, 0666);
-                redir_status = dup2(newfd, oldfd);
-                if (redir_status == -1)
-                {
-                    printf("Bad redirect CHANGE THIS PRINT STATEMENT");
-                }
-                // stop arguments at redirect symbol
-                tokens[redirection[REDIR_INDEX]] = NULL;
+                set_redirection(tokens);
+                tokens[redirection_index] = NULL;
             }
             execvp(tokens[0], tokens);
         }
