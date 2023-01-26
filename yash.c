@@ -24,6 +24,7 @@ char *job_status_strings[] = {"Running", "Stopped"};
 
 struct Job
 {
+    int jobnum;
     int pgid;
     int wpid;
     int status;
@@ -154,11 +155,13 @@ char** set_child_tokens(char  **tokens, int start_index, int end_index)
     return child_tokens;
 }
 
-void set_job_parameters(int job_index, int wpid, int pgid, int status, char* cmd)
+void set_job_parameters(int job_index, int wpid, int pgid, int status, char* cmd, int jobnum)
 {
     jobs[job_index].wpid = wpid;
     jobs[job_index].pgid = pgid;
     jobs[job_index].status = status;
+    jobs[job_index].jobnum = jobnum;
+
     if (job_index == top_stack_job())
     {
         jobs[job_index].cmd = malloc(MAX_LINE_LENGTH * sizeof( char ));
@@ -183,22 +186,24 @@ void delete_dead_job(int index)
             jobs[i + 1].wpid,
             jobs[i + 1].pgid,
             jobs[i + 1].status,
-            jobs[i + 1].cmd
+            jobs[i + 1].cmd,
+            jobs[i + 1].jobnum
         );
     }
     job_count--;
 }
 
-void handle_waitpid_status(int retcpid, int status, int index)
+int handle_waitpid_status(int retcpid, int status, int index)
 {
-    printf("retcpid: %d, status: %d, index: %d\n", retcpid, status, top_stack_job());
+    // printf("retcpid: %d, status: %d, index: %d\n", retcpid, status, top_stack_job());
     int sig = WTERMSIG(status);
     if (retcpid > 0)
     {
-        printf("WIFEXITED: %d, WIFSIGNALED: %d, WIFSTOPPED: %d\n", WIFEXITED(status), WIFSIGNALED(status), WIFSTOPPED(status));
+        // printf("WIFEXITED: %d, WIFSIGNALED: %d, WIFSTOPPED: %d\n", WIFEXITED(status), WIFSIGNALED(status), WIFSTOPPED(status));
         if (WIFEXITED(status) || WIFSIGNALED(status))
         {
             delete_dead_job(index);
+            return 1;
         }
         else if (WIFSTOPPED(status))
         {
@@ -209,7 +214,8 @@ void handle_waitpid_status(int retcpid, int status, int index)
     {
         printf("error occured");
     }
-    printf("Job Count: %d", job_count);
+    // printf("Job Count: %d", job_count);
+    return 0;
 }
 
 void sigchild_handler(int sig)
@@ -217,7 +223,7 @@ void sigchild_handler(int sig)
     int index;
     int retval;
     int status; 
-
+    char *cmd;
     if (fg_flag)
     {
         return;
@@ -226,7 +232,18 @@ void sigchild_handler(int sig)
     for (index = 0; index < job_count; index++)
     {
         retval = waitpid(jobs[index].wpid, &status, WNOHANG | WUNTRACED); 
-        handle_waitpid_status(retval, status, index);
+        cmd = strdup(jobs[index].cmd);
+        if (handle_waitpid_status(retval, status, index) == 1)
+        {
+            if (index == top_stack_job())
+            {
+                printf("[%d]+  Done       %s\n", jobs[index].jobnum, jobs[index].cmd);
+            }
+            else
+            {
+                printf("[%d]-  Done       %s\n", jobs[index].jobnum, jobs[index].cmd);
+            }
+        }
     }
 }
 
@@ -284,11 +301,11 @@ void handle_jobs_cmd()
     {
         if (i == top_stack_job())
         {
-            printf("[%d] + %s       %s\n", i + 1, job_status_strings[jobs[i].status], jobs[i].cmd);
+            printf("[%d] + %s       %s\n", jobs[i].jobnum, job_status_strings[jobs[i].status], jobs[i].cmd);
         }
         else
         {
-            printf("[%d] - %s       %s\n", i + 1, job_status_strings[jobs[i].status], jobs[i].cmd);
+            printf("[%d] - %s       %s\n", jobs[i].jobnum, job_status_strings[jobs[i].status], jobs[i].cmd);
         }
     }
 }
@@ -298,7 +315,7 @@ void handle_bg_cmd()
     int index;
     if (job_count > 0)
     {
-        for (index = job_count - 1; index >= 0; index--)
+        for (index = top_stack_job(); index >= 0; index--)
         {
             if (jobs[index].status == Stopped)
             {
@@ -307,15 +324,24 @@ void handle_bg_cmd()
         }
         kill(-jobs[index].pgid, SIGCONT);
         jobs[index].status = Running;
+        printf("[%d]+ %s\n", jobs[index].jobnum, jobs[index].cmd);
     }
 }
 
 void handle_fg_cmd()
 {
-    int status, retcpid;
+    int status, retcpid, index;
     if (job_count > 0)
     {
+        for (index = 0; index < job_count; index++)
+        {
+            if (jobs[index].status == Running)
+            {
+
+            }
+        }
         fg_flag = true;
+        printf("%s\n", jobs[top_stack_job()].cmd);
         tcsetpgrp(STDIN_FILENO, jobs[top_stack_job()].pgid);
         kill(-jobs[top_stack_job()].pgid, SIGCONT);
         jobs[top_stack_job()].status = Running;
@@ -325,13 +351,12 @@ void handle_fg_cmd()
         fg_flag = false;
         tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
         handle_waitpid_status(retcpid, status, top_stack_job());
-        jobs[top_stack_job()].status = Stopped;
     }
 }
 
 int main()
 {
-    int right_cpid, left_cpid, retcpid, status;
+    int right_cpid, left_cpid, retcpid, status, jobnum;
     char *cmdline;
     char *cmdlinecopy = malloc(MAX_LINE_LENGTH * sizeof( char ));
     char **tokens = NULL;
@@ -380,8 +405,7 @@ int main()
                 tokens[amp_index] = NULL;
             }
             pipe_index = check_for_token(tokens, "|");
-            job_count++;
-            jobs = realloc(jobs, job_count * sizeof( struct Job ));
+            jobs = realloc(jobs, (job_count + 1) * sizeof( struct Job ));
             if (pipe_index > -1)
             {
                 pipe(pfd);
@@ -397,7 +421,12 @@ int main()
                 left_cpid = handle_child(tokens, false, NONE, NONE, NONE, 0);
                 right_cpid = left_cpid;
             }
-            set_job_parameters(top_stack_job(), right_cpid, left_cpid, Running, cmdlinecopy);
+            jobnum = ++job_count;
+            if (job_count > 1)
+            {
+                jobnum = jobs[job_count - 2].jobnum + 1;
+            }
+            set_job_parameters(top_stack_job(), right_cpid, left_cpid, Running, cmdlinecopy, jobnum);
         
             if (amp_index == NONE)
             {
