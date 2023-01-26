@@ -22,22 +22,17 @@ enum job_status
 
 char *job_status_strings[] = {"Running", "Stopped"};
 
-struct Process
-{
-    int pid;
-};
-
 struct Job
 {
     int pgid;
+    int wpid;
     int status;
     char* cmd;
-    struct Process p1;
-    struct Process p2;
 };
 
 struct Job *jobs = NULL;
 static int job_count = 0;
+static int fg_index = 0;
 static bool fg_flag = false;
 #define top_stack_job()(job_count - 1)
 
@@ -159,10 +154,9 @@ char** set_child_tokens(char  **tokens, int start_index, int end_index)
     return child_tokens;
 }
 
-void set_job_parameters(int job_index, int p1id, int p2id, int pgid, int status, char* cmd)
+void set_job_parameters(int job_index, int wpid, int pgid, int status, char* cmd)
 {
-    jobs[job_index].p1.pid = p1id;
-    jobs[job_index].p2.pid = p2id;
+    jobs[job_index].wpid = wpid;
     jobs[job_index].pgid = pgid;
     jobs[job_index].status = status;
     if (job_index == top_stack_job())
@@ -185,9 +179,8 @@ void delete_dead_job(int index)
     for (int i = index; i < job_count - 1; i++)
     {
         set_job_parameters(
-            index,
-            jobs[i + 1].p1.pid,
-            jobs[i + 1].p2.pid,
+            i,
+            jobs[i + 1].wpid,
             jobs[i + 1].pgid,
             jobs[i + 1].status,
             jobs[i + 1].cmd
@@ -198,9 +191,11 @@ void delete_dead_job(int index)
 
 void handle_waitpid_status(int retcpid, int status, int index)
 {
+    printf("retcpid: %d, status: %d, index: %d\n", retcpid, status, top_stack_job());
     int sig = WTERMSIG(status);
     if (retcpid > 0)
     {
+        printf("WIFEXITED: %d, WIFSIGNALED: %d, WIFSTOPPED: %d\n", WIFEXITED(status), WIFSIGNALED(status), WIFSTOPPED(status));
         if (WIFEXITED(status) || WIFSIGNALED(status))
         {
             delete_dead_job(index);
@@ -214,6 +209,7 @@ void handle_waitpid_status(int retcpid, int status, int index)
     {
         printf("error occured");
     }
+    printf("Job Count: %d", job_count);
 }
 
 void sigchild_handler(int sig)
@@ -229,7 +225,7 @@ void sigchild_handler(int sig)
 
     for (index = 0; index < job_count; index++)
     {
-        retval = waitpid(jobs[index].p2.pid, &status, WNOHANG | WUNTRACED); 
+        retval = waitpid(jobs[index].wpid, &status, WNOHANG | WUNTRACED); 
         handle_waitpid_status(retval, status, index);
     }
 }
@@ -284,11 +280,17 @@ int handle_child(char **tokens, bool pipe, int pfd_open, int pfd_close, int repl
 void handle_jobs_cmd()
 {
     int i;
-    for (i = 0; i < job_count - 1; i++)
+    for (i = 0; i < job_count; i++)
     {
-        printf("[%d] - %s       %s\n", i + 1, job_status_strings[jobs[i].status], jobs[i].cmd);
+        if (i == top_stack_job())
+        {
+            printf("[%d] + %s       %s\n", i + 1, job_status_strings[jobs[i].status], jobs[i].cmd);
+        }
+        else
+        {
+            printf("[%d] - %s       %s\n", i + 1, job_status_strings[jobs[i].status], jobs[i].cmd);
+        }
     }
-    printf("[%d] + %s       %s\n", i + 1, job_status_strings[jobs[i].status], jobs[i].cmd);
 }
 
 void handle_bg_cmd()
@@ -319,7 +321,7 @@ void handle_fg_cmd()
         jobs[top_stack_job()].status = Running;
 
         // Wait for Yash to get terminal control back
-        retcpid = waitpid(jobs[top_stack_job()].p2.pid, &status, WUNTRACED);
+        retcpid = waitpid(jobs[top_stack_job()].wpid, &status, WUNTRACED);
         fg_flag = false;
         tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
         handle_waitpid_status(retcpid, status, top_stack_job());
@@ -395,13 +397,13 @@ int main()
                 left_cpid = handle_child(tokens, false, NONE, NONE, NONE, 0);
                 right_cpid = left_cpid;
             }
-            set_job_parameters(top_stack_job(), left_cpid, right_cpid, left_cpid, Running, cmdlinecopy);
+            set_job_parameters(top_stack_job(), right_cpid, left_cpid, Running, cmdlinecopy);
         
             if (amp_index == NONE)
             {
                 fg_flag = true;
                 tcsetpgrp(STDIN_FILENO, jobs[top_stack_job()].pgid);
-                retcpid = waitpid(jobs[top_stack_job()].p2.pid, &status, WUNTRACED);
+                retcpid = waitpid(jobs[top_stack_job()].wpid, &status, WUNTRACED);
                 tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
                 handle_waitpid_status(retcpid, status, top_stack_job());
                 fg_flag = false;
