@@ -380,7 +380,6 @@ void handle_fg_cmd()
         }
 
         fg_flag = true;
-        printf("%s\n", jobs[top_stack_job()].cmd);
         tcsetpgrp(STDIN_FILENO, jobs[top_stack_job()].pgid);
         kill(-jobs[top_stack_job()].pgid, SIGCONT);
         jobs[top_stack_job()].status = Running;
