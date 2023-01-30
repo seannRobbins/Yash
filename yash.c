@@ -364,40 +364,32 @@ void handle_fg_cmd()
     int status, retcpid, index;
     if (job_count > 0)
     {
-        for (index = top_stack_job(); index > 0; index--)
-        {
-            if (jobs[index].status == Stopped)
-            {
-                break;
-            }
-        }
-        
         int char_index = 0;
-        while (jobs[index].cmd[char_index] != '\0')
+        while (jobs[top_stack_job()].cmd[char_index] != '\0')
         {
-            if (jobs[index].cmd[char_index] == '&')
+            if (jobs[top_stack_job()].cmd[char_index] == '&')
             {
-                if (jobs[index].cmd[char_index - 1] == ' ')
+                if (jobs[top_stack_job()].cmd[char_index - 1] == ' ')
                 {
                     char_index--;
                 }
-                jobs[index].cmd[char_index] = '\0';
+                jobs[top_stack_job()].cmd[char_index] = '\0';
                 break;
             }
             char_index++;
         }
 
         fg_flag = true;
-        printf("%s\n", jobs[index].cmd);
-        tcsetpgrp(STDIN_FILENO, jobs[index].pgid);
-        kill(-jobs[index].pgid, SIGCONT);
-        jobs[index].status = Running;
+        printf("%s\n", jobs[top_stack_job()].cmd);
+        tcsetpgrp(STDIN_FILENO, jobs[top_stack_job()].pgid);
+        kill(-jobs[top_stack_job()].pgid, SIGCONT);
+        jobs[top_stack_job()].status = Running;
 
         // Wait for Yash to get terminal control back
-        retcpid = waitpid(jobs[index].wpid, &status, WUNTRACED);
+        retcpid = waitpid(jobs[top_stack_job()].wpid, &status, WUNTRACED);
         fg_flag = false;
         tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
-        handle_waitpid_status(retcpid, status, index);
+        handle_waitpid_status(retcpid, status, top_stack_job());
     }
 }
 
