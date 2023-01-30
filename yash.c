@@ -75,6 +75,25 @@ int check_for_token(char** tokens, char* symbol)
     return NONE;
 }
 
+bool check_for_multiple_of_same_token(char** tokens, char* symbol)
+{
+    int index = 0;
+    bool token_found = false;
+    while (tokens[index] != NULL)
+    {
+        if (STR_EQUAL(tokens[index], symbol) == true && token_found == false)
+        {
+            token_found = true;
+        }
+        else if (STR_EQUAL(tokens[index], symbol) == true && token_found == true)
+        {
+            return true;
+        }
+        index++;
+    }
+    return false;
+}
+
 void set_redirection(char** tokens)
 {
     int fd;
@@ -223,6 +242,8 @@ void sigchild_handler(int sig)
     int index;
     int retval;
     int status; 
+    int stacknum = top_stack_job();
+    int jobnum;
     char *cmd;
     if (fg_flag)
     {
@@ -233,15 +254,16 @@ void sigchild_handler(int sig)
     {
         retval = waitpid(jobs[index].wpid, &status, WNOHANG | WUNTRACED); 
         cmd = strdup(jobs[index].cmd);
+        jobnum = jobs[index].jobnum;
         if (handle_waitpid_status(retval, status, index) == 1)
         {
-            if (index == top_stack_job())
+            if (index == stacknum)
             {
-                printf("[%d]+  Done       %s\n", jobs[index].jobnum, jobs[index].cmd);
+                printf("\n[%d]+  Done       %s\n", jobnum, cmd);
             }
             else
             {
-                printf("[%d]-  Done       %s\n", jobs[index].jobnum, jobs[index].cmd);
+                printf("\n[%d]-  Done       %s\n", jobnum, cmd);
             }
         }
     }
@@ -322,6 +344,15 @@ void handle_bg_cmd()
                 break;
             }
         }
+        if (index < 0)
+        {
+            return;
+        }
+        if (strstr(jobs[index].cmd, "&") == NULL)
+        {
+           jobs[index].cmd = strcat(jobs[index].cmd, " &");
+        }
+
         kill(-jobs[index].pgid, SIGCONT);
         jobs[index].status = Running;
         printf("[%d]+ %s\n", jobs[index].jobnum, jobs[index].cmd);
@@ -333,24 +364,40 @@ void handle_fg_cmd()
     int status, retcpid, index;
     if (job_count > 0)
     {
-        for (index = 0; index < job_count; index++)
+        for (index = top_stack_job(); index > 0; index--)
         {
-            if (jobs[index].status == Running)
+            if (jobs[index].status == Stopped)
             {
-
+                break;
             }
         }
+        
+        int char_index = 0;
+        while (jobs[index].cmd[char_index] != '\0')
+        {
+            if (jobs[index].cmd[char_index] == '&')
+            {
+                if (jobs[index].cmd[char_index - 1] == ' ')
+                {
+                    char_index--;
+                }
+                jobs[index].cmd[char_index] = '\0';
+                break;
+            }
+            char_index++;
+        }
+
         fg_flag = true;
-        printf("%s\n", jobs[top_stack_job()].cmd);
-        tcsetpgrp(STDIN_FILENO, jobs[top_stack_job()].pgid);
-        kill(-jobs[top_stack_job()].pgid, SIGCONT);
-        jobs[top_stack_job()].status = Running;
+        printf("%s\n", jobs[index].cmd);
+        tcsetpgrp(STDIN_FILENO, jobs[index].pgid);
+        kill(-jobs[index].pgid, SIGCONT);
+        jobs[index].status = Running;
 
         // Wait for Yash to get terminal control back
-        retcpid = waitpid(jobs[top_stack_job()].wpid, &status, WUNTRACED);
+        retcpid = waitpid(jobs[index].wpid, &status, WUNTRACED);
         fg_flag = false;
         tcsetpgrp(STDIN_FILENO, getpgid(getpid()));
-        handle_waitpid_status(retcpid, status, top_stack_job());
+        handle_waitpid_status(retcpid, status, index);
     }
 }
 
@@ -411,6 +458,20 @@ int main()
                 pipe(pfd);
                 p1_tokens = set_child_tokens(tokens, 0, pipe_index);
                 p2_tokens = set_child_tokens(tokens, pipe_index + 1, get_number_tokens(tokens) - 1);
+                if (p1_tokens[0] == NULL || p2_tokens[0] == NULL)
+                {
+                    continue;
+                }
+
+                if (check_for_multiple_of_same_token(p1_tokens, ">") || check_for_multiple_of_same_token(p1_tokens, "<") || check_for_multiple_of_same_token(p1_tokens, "2>"))
+                {
+                    continue;
+                }
+                if (check_for_multiple_of_same_token(p2_tokens, ">") || check_for_multiple_of_same_token(p2_tokens, "<") || check_for_multiple_of_same_token(p2_tokens, "2>"))
+                {
+                    continue;
+                }
+
                 left_cpid = handle_child(p1_tokens, true, pfd[1], pfd[0], STDOUT_FILENO, 0);
                 right_cpid = handle_child(p2_tokens, true, pfd[0], pfd[1], STDIN_FILENO, left_cpid);
                 close(pfd[0]);
@@ -418,6 +479,10 @@ int main()
             }
             else
             {
+                if (check_for_multiple_of_same_token(tokens, ">") || check_for_multiple_of_same_token(tokens, "<") || check_for_multiple_of_same_token(tokens, "2>"))
+                {
+                    continue;
+                }
                 left_cpid = handle_child(tokens, false, NONE, NONE, NONE, 0);
                 right_cpid = left_cpid;
             }
