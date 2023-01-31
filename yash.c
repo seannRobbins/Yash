@@ -221,6 +221,7 @@ int handle_waitpid_status(int retcpid, int status, int index)
         // printf("WIFEXITED: %d, WIFSIGNALED: %d, WIFSTOPPED: %d\n", WIFEXITED(status), WIFSIGNALED(status), WIFSTOPPED(status));
         if (WIFEXITED(status) || WIFSIGNALED(status))
         {
+            waitpid(-jobs[index].pgid, &status, WNOHANG | WUNTRACED); 
             delete_dead_job(index);
             return 1;
         }
@@ -229,11 +230,6 @@ int handle_waitpid_status(int retcpid, int status, int index)
             jobs[index].status = Stopped;
         }
     }
-    else if (retcpid == -1)
-    {
-        printf("error occured");
-    }
-    // printf("Job Count: %d", job_count);
     return 0;
 }
 
@@ -380,6 +376,7 @@ void handle_fg_cmd()
         }
 
         fg_flag = true;
+        printf("%s\n", jobs[top_stack_job()].cmd);
         tcsetpgrp(STDIN_FILENO, jobs[top_stack_job()].pgid);
         kill(-jobs[top_stack_job()].pgid, SIGCONT);
         jobs[top_stack_job()].status = Running;
